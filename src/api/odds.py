@@ -1,12 +1,30 @@
 import pandas as pd
 import random
+import streamlit as st
 from datetime import datetime, timedelta
+from src.api.betfair_client import BetfairClient
+
+# Cache the client so it doesn't log in repeatedly for each widget refresh
+@st.cache_resource
+def get_betfair_client():
+    return BetfairClient()
 
 def get_upcoming_matches() -> pd.DataFrame:
     """
     Returns a dataframe of upcoming matches and mock betting odds.
-    Serves as a structural fallback until The-Odds-API key is plugged in.
+    Serves as a structural fallback until The-Odds-API key or Betfair session is plugged in.
     """
+    client = get_betfair_client()
+    
+    # Attempt to fetch live Betfair odds
+    df_live = client.get_tennis_odds()
+    
+    if df_live is not None and not df_live.empty:
+        # We got real data!
+        return df_live
+
+    # Fallback to mock data if auth failed or API rate limited
+    st.warning("⚠️ Local Geoblock Detected: Your internet connection is dropping API requests to Betfair and The-Odds-API. Using Mock Data Database. Deploy this app to a server in a supported region (e.g. UK/EU) to unlock live odds.", icon="⚠️")
     players = ["Novak Djokovic", "Carlos Alcaraz", "Jannik Sinner", "Daniil Medvedev", "Alexander Zverev"]
     
     matches = []
