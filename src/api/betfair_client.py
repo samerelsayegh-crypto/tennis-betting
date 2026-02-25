@@ -376,7 +376,7 @@ class BetfairClient:
     def get_bet_history(self) -> tuple[list | None, str | None]:
         """
         Fetch current (open) orders and recently settled orders.
-        Returns a list of bet dicts.
+        Returns a list of bet dicts including selectionId for runner name resolution.
         """
         if not self.session_token:
             ok, msg = self.login()
@@ -391,16 +391,20 @@ class BetfairClient:
             return None, err
         if isinstance(current, dict):
             for o in current.get("currentOrders", []):
+                price = o.get("averagePriceMatched", 0)
+                size = o.get("sizeMatched", 0)
+                potential_profit = round((price - 1.0) * size, 2) if price > 0 and size > 0 else 0
                 bets.append({
                     "Bet ID": o.get("betId", ""),
                     "Market ID": o.get("marketId", ""),
+                    "Selection ID": o.get("selectionId", 0),
                     "Side": o.get("side", ""),
-                    "Price": o.get("priceSize", {}).get("price", o.get("averagePriceMatched", 0)),
-                    "Size": o.get("priceSize", {}).get("size", o.get("sizeMatched", 0)),
-                    "Matched": o.get("sizeMatched", 0),
+                    "Price": price,
+                    "Size": size,
+                    "Matched": size,
                     "Status": o.get("status", "OPEN"),
                     "Placed": o.get("placedDate", ""),
-                    "Profit/Loss": "-",
+                    "Potential Profit": potential_profit,
                 })
 
         # Settled orders
@@ -410,16 +414,18 @@ class BetfairClient:
         })
         if isinstance(settled, dict):
             for o in settled.get("clearedOrders", []):
+                profit = o.get("profit", 0)
                 bets.append({
                     "Bet ID": o.get("betId", ""),
                     "Market ID": o.get("marketId", ""),
+                    "Selection ID": o.get("selectionId", 0),
                     "Side": o.get("side", ""),
                     "Price": o.get("priceMatched", 0),
                     "Size": o.get("sizeSettled", 0),
                     "Matched": o.get("sizeSettled", 0),
                     "Status": "SETTLED",
                     "Placed": o.get("placedDate", ""),
-                    "Profit/Loss": f"£{o.get('profit', 0):,.2f}",
+                    "Potential Profit": profit,
                 })
 
         return bets, None

@@ -291,9 +291,10 @@ with tab5:
     elif bets:
         df_bets = pd.DataFrame(bets)
 
-        # ── Resolve market IDs to match names ──
+        # ── Resolve market IDs to match names AND runner names ──
         unique_market_ids = df_bets['Market ID'].unique().tolist()
         market_names = {}
+        runner_names = {}  # {selectionId: "Player Name"}
         try:
             catalogue, _ = bet_client._api_call("listMarketCatalogue", {
                 "filter": {"marketIds": unique_market_ids},
@@ -303,15 +304,14 @@ with tab5:
             if catalogue:
                 for m in catalogue:
                     runners = m.get("runners", [])
-                    event = m.get("event", {}).get("name", "")
                     if len(runners) >= 2:
                         market_names[m["marketId"]] = f"{runners[0].get('runnerName', '?')} vs {runners[1].get('runnerName', '?')}"
-                    elif event:
-                        market_names[m["marketId"]] = event
+                        for r in runners:
+                            runner_names[r["selectionId"]] = r.get("runnerName", "Unknown")
         except Exception:
             pass
 
-        # ── Clean up the data for display ──
+        # ── Build clean display table ──
         STATUS_MAP = {
             "EXECUTION_COMPLETE": "✅ Matched",
             "EXECUTABLE": "⏳ Waiting",
@@ -321,41 +321,40 @@ with tab5:
         display_rows = []
         for _, row in df_bets.iterrows():
             match_name = market_names.get(row['Market ID'], row['Market ID'])
+            player_backed = runner_names.get(row.get('Selection ID', 0), "Unknown")
 
             # Format timestamp
             placed_raw = row.get('Placed', '')
             try:
                 placed_dt = dt.strptime(placed_raw, "%Y-%m-%dT%H:%M:%S.%fZ")
-                placed_str = placed_dt.strftime("%d %b %Y, %H:%M")
+                placed_str = placed_dt.strftime("%d %b, %H:%M")
             except Exception:
                 placed_str = placed_raw
 
-            status_raw = row.get('Status', '')
-            status_clean = STATUS_MAP.get(status_raw, status_raw)
+            status_clean = STATUS_MAP.get(row.get('Status', ''), row.get('Status', ''))
+            potential = row.get('Potential Profit', 0)
+            profit_str = f"£{potential:,.2f}" if potential else "-"
 
             display_rows.append({
                 "Match": match_name,
-                "Type": f"{'🟢' if row['Side'] == 'BACK' else '🔴'} {row['Side']}",
+                "Player Backed": f"🎾 {player_backed}",
                 "Odds": row['Price'],
                 "Stake": f"£{float(row['Size']):,.2f}",
-                "Matched": f"£{float(row['Matched']):,.2f}",
+                "If Wins": profit_str,
                 "Status": status_clean,
-                "Date": placed_str,
-                "P/L": row.get('Profit/Loss', '-'),
+                "Time": placed_str,
             })
 
         df_display = pd.DataFrame(display_rows)
 
         # Summary metrics
-        matched_bets = df_bets[df_bets['Status'] == 'EXECUTION_COMPLETE']
-        settled_bets = df_bets[df_bets['Status'] == 'SETTLED']
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Bets", len(df_bets))
-        col2.metric("✅ Matched", len(matched_bets))
-        col3.metric("🏁 Settled", len(settled_bets))
         total_staked = pd.to_numeric(df_bets['Size'], errors='coerce').sum()
-        col4.metric("Total Staked", f"£{total_staked:,.2f}")
+        total_potential = pd.to_numeric(df_bets['Potential Profit'], errors='coerce').sum()
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Bets", len(df_bets))
+        col2.metric("Total Staked", f"£{total_staked:,.2f}")
+        col3.metric("Potential Profit (if all win)", f"£{total_potential:,.2f}")
 
         st.markdown("---")
         st.dataframe(df_display, use_container_width=True, hide_index=True)
