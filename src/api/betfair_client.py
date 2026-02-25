@@ -67,8 +67,10 @@ class BetfairClient:
         try:
             resp = requests.post(self.LOGIN_URL, headers=headers, data=payload, timeout=15)
 
+            if resp.status_code == 403:
+                return False, "Betfair Geo-Restriction: Betfair has blocked this server's IP because it is hosted in a restricted country (e.g. US). This app must be run locally with a UK/EU VPN to connect to the Betfair Exchange. Using Mock Data instead."
             if resp.status_code != 200:
-                return False, f"Login HTTP error {resp.status_code}: {resp.text}"
+                return False, f"Login HTTP error {resp.status_code}"
 
             data = resp.json()
             status = data.get("status", "")
