@@ -17,14 +17,17 @@ def get_upcoming_matches() -> pd.DataFrame:
     client = get_betfair_client()
     
     # Attempt to fetch live Betfair odds
-    df_live = client.get_tennis_odds()
+    df_live, error_msg = client.get_tennis_odds()
     
     if df_live is not None and not df_live.empty:
         # We got real data!
         return df_live
 
-    # Fallback to mock data if auth failed or API rate limited
-    st.warning("⚠️ Local Geoblock Detected: Your internet connection is dropping API requests to Betfair and The-Odds-API. Using Mock Data Database. Deploy this app to a server in a supported region (e.g. UK/EU) to unlock live odds.", icon="⚠️")
+    # Fallback to mock data if auth failed, rate limited, or geoblocked
+    if error_msg:
+        st.warning(f"⚠️ API Connection Failed: {error_msg}. Using Mock Data Database instead.", icon="⚠️")
+    else:
+        st.warning("⚠️ Live Odds Unavailable. Using Mock Data Database.", icon="⚠️")
     players = ["Novak Djokovic", "Carlos Alcaraz", "Jannik Sinner", "Daniil Medvedev", "Alexander Zverev"]
     
     matches = []
