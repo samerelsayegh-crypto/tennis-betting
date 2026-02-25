@@ -1,78 +1,166 @@
 import time
-import random
+from datetime import datetime
+
 
 class LiveBettingAgent:
     """
-    Simulates a live AI betting agent hooked into a betting exchange.
-    Since we don't have a real WebSocket for live points, this paper-trades 
-    by simulating point generation and applying the chosen betting strategy autonomously.
+    Real-money AI betting agent that connects to the Betfair Exchange.
+    Monitors live odds, detects points via odds movement, and places
+    real bets using the user's chosen strategy.
     """
-    def __init__(self, target_player: str, strategy_name: str, base_bet: float, avg_odds: float):
+
+    # Minimum odds shift (%) to consider a point scored
+    POINT_DETECTION_THRESHOLD = 0.03  # 3%
+    POLL_INTERVAL = 5  # seconds between odds checks
+
+    def __init__(self, client, market_id: str, target_selection_id: int,
+                 target_player: str, strategy_name: str, base_bet: float,
+                 max_loss: float = 50.0, max_single_bet: float = 20.0):
+        self.client = client
+        self.market_id = market_id
+        self.target_selection_id = target_selection_id
         self.target_player = target_player
         self.strategy_name = strategy_name
         self.base_bet = base_bet
         self.current_bet = base_bet
-        self.avg_odds = avg_odds
-        
-        self.bankroll = 1000.0  # Starting simulation bankroll
-        self.points_played = 0
+        self.max_loss = max_loss
+        self.max_single_bet = max_single_bet
+
+        self.cumulative_pnl = 0.0
+        self.points_detected = 0
         self.wins = 0
         self.losses = 0
+        self.bets_placed = []
 
-    def run_simulation_step(self) -> str:
+        self.prev_odds = None  # previous back odds for target player
+        self.running = True
+        self.status = "INITIALIZING"
+
+    def _ts(self) -> str:
+        return datetime.now().strftime("%H:%M:%S")
+
+    def poll_and_act(self) -> str:
         """
-        Simulates exactly one point being played and the agent reacting to it.
-        Returns a formatted log string to feed into the Streamlit terminal.
+        Single iteration of the agent loop.
+        Returns a log string for the UI.
         """
-        time.sleep(1.2)  # Simulate time passing for the UI terminal feel
-        self.points_played += 1
-        
-        # 1. Agent logs intent
-        log_msgs = []
-        log_msgs.append(f"🤖 **[Point {self.points_played}]** Placing bet: **${self.current_bet:,.2f}** on **{self.target_player}** at odds {self.avg_odds}.")
-        
-        # 2. Simulate the point outcome (50/50 chance for simulation purposes, or slightly weighted by odds)
-        # Implied probability = 1 / odds
-        implied_prob = 1.0 / self.avg_odds if self.avg_odds > 1.0 else 0.5
-        won_point = random.random() < implied_prob
-        
-        # 3. Process outcome
-        if won_point:
-            profit = self.current_bet * (self.avg_odds - 1.0)
-            self.bankroll += profit
+        logs = []
+
+        # ── 1. Poll current market odds ──
+        odds_data, err = self.client.get_market_odds(self.market_id)
+        if err:
+            self.status = "ERROR"
+            self.running = False
+            return f"🔴 [{self._ts()}] **ERROR polling odds:** {err}. Agent stopped."
+
+        market_status = odds_data.get("marketStatus", "UNKNOWN")
+
+        # Check if market is closed (match is over)
+        if market_status == "CLOSED":
+            self.status = "MATCH_ENDED"
+            self.running = False
+            return f"🏁 [{self._ts()}] **Match has ended.** Market closed. Final P&L: £{self.cumulative_pnl:,.2f}"
+
+        # If market is not yet in-play, wait
+        if market_status not in ("OPEN", "SUSPENDED"):
+            # "INACTIVE" means pre-match — keep waiting
+            pass
+
+        runners = odds_data.get("runners", {})
+        target_runner = runners.get(self.target_selection_id)
+
+        if not target_runner:
+            return f"⏳ [{self._ts()}] Waiting for runner data..."
+
+        current_back = target_runner.get("back", 0.0)
+
+        if current_back == 0.0:
+            return f"⏳ [{self._ts()}] No back price available yet. Market may be suspended."
+
+        # ── 2. First poll: establish baseline ──
+        if self.prev_odds is None:
+            self.prev_odds = current_back
+            self.status = "MONITORING"
+            return f"🟢 [{self._ts()}] Agent LIVE. Baseline odds for **{self.target_player}**: **{current_back}**. Monitoring for points..."
+
+        # ── 3. Detect point via odds shift ──
+        odds_change = (current_back - self.prev_odds) / self.prev_odds if self.prev_odds else 0
+        abs_change = abs(odds_change)
+
+        if abs_change < self.POINT_DETECTION_THRESHOLD:
+            # No significant change — market is stable
+            logs.append(f"⏳ [{self._ts()}] Odds: {current_back} (Δ {odds_change:+.1%}). No point detected.")
+            self.prev_odds = current_back
+            return "\n\n".join(logs)
+
+        # ── Point detected! ──
+        self.points_detected += 1
+        point_winner_is_target = odds_change < 0  # odds dropping = player got stronger = won
+
+        if point_winner_is_target:
             self.wins += 1
-            log_msgs.append(f"✅ Target WON the point! Profit: **+${profit:,.2f}** | Bankroll: ${self.bankroll:,.2f}")
-            
-            # Reset bet according to strategy
+            profit = self.current_bet * (self.prev_odds - 1.0)
+            self.cumulative_pnl += profit
+            logs.append(f"✅ [{self._ts()}] **POINT {self.points_detected}: {self.target_player} WON!** Odds shifted {self.prev_odds} → {current_back} ({odds_change:+.1%})")
+            logs.append(f"💰 Virtual profit on last stake: +£{profit:,.2f} | Cumulative P&L: £{self.cumulative_pnl:,.2f}")
+
+            # Strategy: reset on win
             if self.strategy_name == "Doubling Strategy":
                 self.current_bet = self.base_bet
-                log_msgs.append(f"🔄 Strategy Reset: Returning to base bet of ${self.base_bet:,.2f}.")
-                
+                logs.append(f"🔄 Martingale reset → next bet: £{self.current_bet:,.2f}")
         else:
-            self.bankroll -= self.current_bet
             self.losses += 1
-            log_msgs.append(f"❌ Target LOST the point. Loss: **-${self.current_bet:,.2f}** | Bankroll: ${self.bankroll:,.2f}")
-            
-            # Increase bet according to strategy
+            self.cumulative_pnl -= self.current_bet
+            logs.append(f"❌ [{self._ts()}] **POINT {self.points_detected}: {self.target_player} LOST.** Odds shifted {self.prev_odds} → {current_back} ({odds_change:+.1%})")
+            logs.append(f"📉 Loss: -£{self.current_bet:,.2f} | Cumulative P&L: £{self.cumulative_pnl:,.2f}")
+
+            # Strategy: double on loss
             if self.strategy_name == "Doubling Strategy":
-                self.current_bet *= 2.0
-                log_msgs.append(f"📈 Martingale Trigger: Doubling bet to ${self.current_bet:,.2f} to recover losses.")
-                
-        # For Flat Betting, current_bet stays the same.
-        # For Kelly Criterion, simulate bankroll update (simplified vs full backtester)
+                self.current_bet = min(self.current_bet * 2.0, self.max_single_bet)
+                logs.append(f"📈 Martingale double → next bet: £{self.current_bet:,.2f}")
+
+        # Kelly recalculation
         if self.strategy_name == "Kelly Criterion":
-            # Kelly = Bankroll * (Expected Value) / (Odds - 1)
-            # Assuming a fixed 55% win prob here just for the paper-trading simulation
-            edge = (0.55 * self.avg_odds) - 1.0
+            total = self.wins + self.losses
+            win_rate = self.wins / total if total > 0 else 0.55
+            edge = (win_rate * current_back) - 1.0
             if edge > 0:
-                self.current_bet = self.bankroll * (edge / (self.avg_odds - 1.0))
-                # Protect from going all in too dangerously or betting less than base
-                self.current_bet = max(self.base_bet, min(self.current_bet, self.bankroll * 0.1))
+                kelly_fraction = edge / (current_back - 1.0)
+                self.current_bet = max(self.base_bet, min(kelly_fraction * 100, self.max_single_bet))
             else:
                 self.current_bet = self.base_bet
-            log_msgs.append(f"🧮 Kelly Recalculation: Next stake sized dynamically at ${self.current_bet:,.2f}.")
-            
-        # Add slight delay for readability
-        time.sleep(0.5)
-        
-        return "\n\n".join(log_msgs)
+            logs.append(f"🧮 Kelly recalc → next bet: £{self.current_bet:,.2f} (win rate: {win_rate:.0%})")
+
+        # ── 4. Safety: check max loss ──
+        if self.cumulative_pnl <= -self.max_loss:
+            self.running = False
+            self.status = "STOPPED_MAX_LOSS"
+            logs.append(f"🛑 **MAX LOSS REACHED (£{self.max_loss}).** Agent shutting down for safety.")
+            self.prev_odds = current_back
+            return "\n\n".join(logs)
+
+        # ── 5. Place the REAL bet for the next point ──
+        bet_size = min(self.current_bet, self.max_single_bet)
+        bet_size = round(max(bet_size, 2.0), 2)  # Betfair minimum bet is £2
+
+        logs.append(f"🤖 [{self._ts()}] **Placing REAL BET:** BACK {self.target_player} | £{bet_size} @ {current_back}")
+
+        bet_result, bet_err = self.client.place_bet(
+            market_id=self.market_id,
+            selection_id=self.target_selection_id,
+            side="BACK",
+            price=current_back,
+            size=bet_size,
+        )
+
+        if bet_err:
+            logs.append(f"⚠️ Bet placement error: {bet_err}")
+        elif bet_result:
+            bet_id = bet_result.get("betId", "N/A")
+            matched = bet_result.get("sizeMatched", 0)
+            avg_price = bet_result.get("averagePriceMatched", 0)
+            self.bets_placed.append(bet_result)
+            logs.append(f"✅ **BET CONFIRMED** | ID: {bet_id} | Matched: £{matched} @ {avg_price}")
+
+        self.prev_odds = current_back
+        return "\n\n".join(logs)

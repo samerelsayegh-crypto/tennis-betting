@@ -230,6 +230,8 @@ class BetfairClient:
                 "Date/Time": display_time,
                 "Player 1": p1_name,
                 "Player 2": p2_name,
+                "P1 Selection ID": runners[0]["selectionId"],
+                "P2 Selection ID": runners[1]["selectionId"],
                 "P1 Win Odds": round(p1_odds, 2) if p1_odds else "-",
                 "P2 Win Odds": round(p2_odds, 2) if p2_odds else "-",
                 "P1 Est. Point Odds": round(1.0 + (p1_odds - 1.0) * 0.25, 2) if p1_odds else 1.90,
@@ -239,3 +241,109 @@ class BetfairClient:
             return None, "Connected to Betfair successfully, but no active Tennis Match Odds markets were found."
 
         return pd.DataFrame(matches_data), None
+
+    # ── Real Betting Methods ──────────────────────────────────────────
+
+    def get_account_balance(self) -> tuple[float | None, str | None]:
+        """Fetch the available balance from the user's Betfair account."""
+        ACCOUNT_URL = "https://api.betfair.com/exchange/account/json-rpc/v1"
+        if not self.session_token:
+            ok, msg = self.login()
+            if not ok:
+                return None, msg
+
+        headers = {
+            "X-Application": self.app_key,
+            "X-Authentication": self.session_token,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "AccountAPING/v1.0/getAccountFunds",
+            "params": {},
+            "id": 1,
+        }
+        try:
+            resp = requests.post(ACCOUNT_URL, json=payload, headers=headers, timeout=10)
+            data = resp.json()
+            if "error" in data:
+                return None, f"Account API error: {data['error']}"
+            result = data.get("result", {})
+            return result.get("availableToBetBalance", 0.0), None
+        except Exception as e:
+            return None, f"Failed to fetch balance: {str(e)}"
+
+    def get_market_odds(self, market_id: str) -> tuple[dict | None, str | None]:
+        """
+        Poll a single market for current back/lay prices.
+        Returns dict: {selectionId: {"back": price, "lay": price, "status": str}, ...}
+        """
+        result, err = self._api_call("listMarketBook", {
+            "marketIds": [market_id],
+            "priceProjection": {
+                "priceData": ["EX_BEST_OFFERS"],
+            },
+        })
+        if err:
+            return None, err
+        if not result:
+            return None, "Market not found."
+
+        book = result[0]
+        market_status = book.get("status", "UNKNOWN")
+
+        odds_data = {"marketStatus": market_status, "runners": {}}
+        for runner in book.get("runners", []):
+            sel_id = runner["selectionId"]
+            back_prices = runner.get("ex", {}).get("availableToBack", [])
+            lay_prices = runner.get("ex", {}).get("availableToLay", [])
+            odds_data["runners"][sel_id] = {
+                "back": back_prices[0]["price"] if back_prices else 0.0,
+                "lay": lay_prices[0]["price"] if lay_prices else 0.0,
+                "status": runner.get("status", "ACTIVE"),
+            }
+        return odds_data, None
+
+    def place_bet(self, market_id: str, selection_id: int, side: str,
+                  price: float, size: float) -> tuple[dict | None, str | None]:
+        """
+        Place a real bet on the Betfair Exchange.
+        side: "BACK" or "LAY"
+        price: the odds (decimal)
+        size: stake in account currency (GBP)
+        """
+        result, err = self._api_call("placeOrders", {
+            "marketId": market_id,
+            "instructions": [{
+                "selectionId": selection_id,
+                "handicap": "0",
+                "side": side,
+                "orderType": "LIMIT",
+                "limitOrder": {
+                    "size": round(size, 2),
+                    "price": price,
+                    "persistenceType": "LAPSE",
+                },
+            }],
+        })
+        if err:
+            return None, err
+        if not result:
+            return None, "No response from placeOrders."
+
+        status = result.get("status", "UNKNOWN")
+        if status == "SUCCESS":
+            instruction_reports = result.get("instructionReports", [{}])
+            report = instruction_reports[0] if instruction_reports else {}
+            return {
+                "status": "SUCCESS",
+                "betId": report.get("betId", "N/A"),
+                "placedDate": report.get("placedDate", ""),
+                "averagePriceMatched": report.get("averagePriceMatched", 0),
+                "sizeMatched": report.get("sizeMatched", 0),
+            }, None
+        else:
+            error_code = result.get("errorCode", "UNKNOWN")
+            instruction_reports = result.get("instructionReports", [{}])
+            instr_error = instruction_reports[0].get("errorCode", "") if instruction_reports else ""
+            return None, f"Bet placement failed: {error_code} / {instr_error}"

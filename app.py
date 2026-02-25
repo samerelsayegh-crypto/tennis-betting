@@ -134,67 +134,97 @@ with tab3:
 
 with tab4:
     st.header("🤖 Autonomous AI Betting Agent")
-    st.write("Deploy the AI to watch an upcoming match and execute trades autonomously via paper-trading.")
-    
+    st.write("Deploy the AI to watch an upcoming match and **place real bets** on the Betfair Exchange using your chosen strategy.")
+
     st.subheader("1. Select Target Match")
     try:
         df_upcoming = get_upcoming_matches()
         if df_upcoming is not None and not df_upcoming.empty:
             match_options = df_upcoming.apply(lambda row: f"{row['Player 1']} vs {row['Player 2']} ({row['Date/Time']})", axis=1).tolist()
             selected_match_str = st.selectbox("Select Match to Monitor:", match_options)
-            
+
             selected_row = df_upcoming.iloc[match_options.index(selected_match_str)]
+            market_id = selected_row['Match ID']
             p1 = selected_row['Player 1']
             p2 = selected_row['Player 2']
-            p1_odds = float(selected_row['P1 Est. Point Odds']) if 'P1 Est. Point Odds' in selected_row else 1.90
-            
+            p1_sel_id = int(selected_row['P1 Selection ID']) if 'P1 Selection ID' in selected_row else 0
+            p2_sel_id = int(selected_row['P2 Selection ID']) if 'P2 Selection ID' in selected_row else 0
+
             st.subheader("2. Configure Agent Parameters")
             col1, col2 = st.columns(2)
             with col1:
                 target_player = st.selectbox("Player to Back:", [p1, p2])
                 agent_strategy = st.selectbox("Agent Betting Strategy:", ["Doubling Strategy", "Flat Betting (Unit System)", "Kelly Criterion"])
-                
+
             with col2:
-                agent_base_bet = st.number_input("Starting Base Bet ($)", min_value=1.0, value=10.0, step=5.0)
-                # Assign assumed odds for point simulation
-                agent_odds = p1_odds if target_player == p1 else 1.90
-                st.metric("Estimated Point Odds", round(agent_odds, 2))
-                
+                agent_base_bet = st.number_input("Starting Base Bet (£)", min_value=2.0, value=2.0, step=1.0)
+                target_sel_id = p1_sel_id if target_player == p1 else p2_sel_id
+
+            st.subheader("3. Safety Controls")
+            col3, col4 = st.columns(2)
+            with col3:
+                max_loss = st.number_input("Max Loss Limit (£)", min_value=5.0, value=50.0, step=5.0)
+            with col4:
+                max_single_bet = st.number_input("Max Single Bet (£)", min_value=2.0, value=20.0, step=2.0)
+
+            # Show account balance
+            from src.api.odds import get_betfair_client
+            client = get_betfair_client()
+            balance, bal_err = client.get_account_balance()
+            if balance is not None:
+                st.success(f"💰 Betfair Account Balance: **£{balance:,.2f}**")
+            elif bal_err:
+                st.warning(f"Could not fetch balance: {bal_err}")
+
             st.markdown("---")
-            
+            st.warning("⚠️ **REAL MONEY MODE**: Clicking Deploy will place actual bets on your Betfair account.", icon="⚠️")
+
             if st.button("🚀 Deploy AI Agent", type="primary"):
                 st.subheader("🔴 Live Agent Console")
-                # Setup UI container for logs
                 terminal_container = st.empty()
-                terminal_container.info("Initializing Agent Engine...")
-                
-                # Create the agent instance
+                status_container = st.empty()
+                terminal_container.info("🟡 Initializing Agent Engine... Connecting to Betfair Exchange.")
+
+                # Create the real agent
                 agent = LiveBettingAgent(
+                    client=client,
+                    market_id=market_id,
+                    target_selection_id=target_sel_id,
                     target_player=target_player,
                     strategy_name=agent_strategy,
                     base_bet=agent_base_bet,
-                    avg_odds=agent_odds
+                    max_loss=max_loss,
+                    max_single_bet=max_single_bet,
                 )
-                
-                # Simulation loop
-                max_points_to_simulate = 20
-                
+
                 full_log = ""
-                for i in range(max_points_to_simulate):
-                    # Agent runs a single step
-                    step_log = agent.run_simulation_step()
+                max_iterations = 500  # ~40 minutes of monitoring at 5s intervals
+
+                for i in range(max_iterations):
+                    step_log = agent.poll_and_act()
                     full_log = f"{step_log}\n\n---\n\n" + full_log
-                    
-                    # Update container with markdown log
-                    terminal_container.markdown(f"```text\n{full_log}\n```")
-                    
-                    if agent.bankroll <= 0:
-                        st.error("📉 Bankroll depleted. Agent automatically shut down.")
+
+                    # Update UI
+                    terminal_container.markdown(f"```text\n{full_log[:5000]}\n```")
+                    status_container.info(f"📊 Points: {agent.points_detected} | W/L: {agent.wins}/{agent.losses} | P&L: £{agent.cumulative_pnl:,.2f} | Bets Placed: {len(agent.bets_placed)}")
+
+                    if not agent.running:
                         break
-                        
-                st.success(f"Simulation completed. Final Bankroll: ${agent.bankroll:,.2f} | Wins: {agent.wins} | Losses: {agent.losses}")
-                    
+
+                    time.sleep(agent.POLL_INTERVAL)
+
+                # Final summary
+                if agent.status == "MATCH_ENDED":
+                    st.success(f"🏁 Match finished! Final P&L: £{agent.cumulative_pnl:,.2f} | Wins: {agent.wins} | Losses: {agent.losses} | Bets: {len(agent.bets_placed)}")
+                elif agent.status == "STOPPED_MAX_LOSS":
+                    st.error(f"🛑 Agent stopped — max loss of £{max_loss} reached. P&L: £{agent.cumulative_pnl:,.2f}")
+                elif agent.status == "ERROR":
+                    st.error("🔴 Agent stopped due to an API error. Check the logs above.")
+                else:
+                    st.info(f"Agent completed {max_iterations} polling cycles. P&L: £{agent.cumulative_pnl:,.2f}")
+
         else:
             st.info("No upcoming matches available to monitor right now.")
     except Exception as e:
          st.error(f"Could not load upcoming matches for the agent: {e}")
+
