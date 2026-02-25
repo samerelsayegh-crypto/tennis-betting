@@ -4,12 +4,14 @@ import plotly.express as px
 from src.api.rankings import get_atp_rankings
 from src.api.odds import get_upcoming_matches
 from src.engine.backtester import StrategyBacktester
+from src.engine.ai_agent import LiveBettingAgent
+import time
 
 st.set_page_config(page_title="Tennis Betting Analytics", layout="wide", page_icon="🎾")
 
 st.title("🎾 Tennis Betting Analytics & Backtesting Dashboard")
 
-tab1, tab2, tab3 = st.tabs(["📊 Rankings & Odds", "⚙️ Strategy Backtester", "📈 Backtest Results"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Rankings & Odds", "⚙️ Strategy Backtester", "📈 Backtest Results", "🤖 AI Live Agent"])
 
 with tab1:
     st.header("Top 200 Players & Form")
@@ -129,3 +131,70 @@ with tab3:
         st.dataframe(df_history, use_container_width=True)
     else:
         st.info("Run a simulation in the '⚙️ Strategy Backtester' tab first to view results here.")
+
+with tab4:
+    st.header("🤖 Autonomous AI Betting Agent")
+    st.write("Deploy the AI to watch an upcoming match and execute trades autonomously via paper-trading.")
+    
+    st.subheader("1. Select Target Match")
+    try:
+        df_upcoming = get_upcoming_matches()
+        if df_upcoming is not None and not df_upcoming.empty:
+            match_options = df_upcoming.apply(lambda row: f"{row['Player 1']} vs {row['Player 2']} ({row['Date/Time']})", axis=1).tolist()
+            selected_match_str = st.selectbox("Select Match to Monitor:", match_options)
+            
+            selected_row = df_upcoming.iloc[match_options.index(selected_match_str)]
+            p1 = selected_row['Player 1']
+            p2 = selected_row['Player 2']
+            p1_odds = float(selected_row['P1 Est. Point Odds']) if 'P1 Est. Point Odds' in selected_row else 1.90
+            
+            st.subheader("2. Configure Agent Parameters")
+            col1, col2 = st.columns(2)
+            with col1:
+                target_player = st.selectbox("Player to Back:", [p1, p2])
+                agent_strategy = st.selectbox("Agent Betting Strategy:", ["Doubling Strategy", "Flat Betting (Unit System)", "Kelly Criterion"])
+                
+            with col2:
+                agent_base_bet = st.number_input("Starting Base Bet ($)", min_value=1.0, value=10.0, step=5.0)
+                # Assign assumed odds for point simulation
+                agent_odds = p1_odds if target_player == p1 else 1.90
+                st.metric("Estimated Point Odds", round(agent_odds, 2))
+                
+            st.markdown("---")
+            
+            if st.button("🚀 Deploy AI Agent", type="primary"):
+                st.subheader("🔴 Live Agent Console")
+                # Setup UI container for logs
+                terminal_container = st.empty()
+                terminal_container.info("Initializing Agent Engine...")
+                
+                # Create the agent instance
+                agent = LiveBettingAgent(
+                    target_player=target_player,
+                    strategy_name=agent_strategy,
+                    base_bet=agent_base_bet,
+                    avg_odds=agent_odds
+                )
+                
+                # Simulation loop
+                max_points_to_simulate = 20
+                
+                full_log = ""
+                for i in range(max_points_to_simulate):
+                    # Agent runs a single step
+                    step_log = agent.run_simulation_step()
+                    full_log = f"{step_log}\n\n---\n\n" + full_log
+                    
+                    # Update container with markdown log
+                    terminal_container.markdown(f"```text\n{full_log}\n```")
+                    
+                    if agent.bankroll <= 0:
+                        st.error("📉 Bankroll depleted. Agent automatically shut down.")
+                        break
+                        
+                st.success(f"Simulation completed. Final Bankroll: ${agent.bankroll:,.2f} | Wins: {agent.wins} | Losses: {agent.losses}")
+                    
+        else:
+            st.info("No upcoming matches available to monitor right now.")
+    except Exception as e:
+         st.error(f"Could not load upcoming matches for the agent: {e}")
