@@ -27,10 +27,22 @@ class BetfairClient:
     TENNIS_EVENT_TYPE_ID = "2"
 
     def __init__(self):
-        self.app_key = os.getenv("BETFAIR_APP_KEY", "")
-        self.username = os.getenv("BETFAIR_USERNAME", "")
-        self.password = os.getenv("BETFAIR_PASSWORD", "")
+        self.app_key = self._get_secret("BETFAIR_APP_KEY")
+        self.username = self._get_secret("BETFAIR_USERNAME")
+        self.password = self._get_secret("BETFAIR_PASSWORD")
         self.session_token = None
+
+    @staticmethod
+    def _get_secret(key: str) -> str:
+        """Read from os.getenv first, then fall back to Streamlit secrets."""
+        val = os.getenv(key, "")
+        if val:
+            return val
+        try:
+            import streamlit as st
+            return st.secrets.get(key, "")
+        except Exception:
+            return ""
 
     def login(self) -> tuple[bool, str]:
         """
