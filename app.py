@@ -271,9 +271,10 @@ with tab4:
 
 with tab5:
     st.header("💰 Real Bet Log")
-    st.write("All bets placed on your Betfair account — open and settled.")
+    st.write("Your real bets placed on the Betfair Exchange.")
 
     from src.api.odds import get_betfair_client
+    from datetime import datetime as dt
     bet_client = get_betfair_client()
 
     # Show balance
@@ -290,24 +291,74 @@ with tab5:
     elif bets:
         df_bets = pd.DataFrame(bets)
 
+        # ── Resolve market IDs to match names ──
+        unique_market_ids = df_bets['Market ID'].unique().tolist()
+        market_names = {}
+        try:
+            catalogue, _ = bet_client._api_call("listMarketCatalogue", {
+                "filter": {"marketIds": unique_market_ids},
+                "maxResults": str(len(unique_market_ids)),
+                "marketProjection": ["EVENT", "RUNNER_DESCRIPTION"],
+            })
+            if catalogue:
+                for m in catalogue:
+                    runners = m.get("runners", [])
+                    event = m.get("event", {}).get("name", "")
+                    if len(runners) >= 2:
+                        market_names[m["marketId"]] = f"{runners[0].get('runnerName', '?')} vs {runners[1].get('runnerName', '?')}"
+                    elif event:
+                        market_names[m["marketId"]] = event
+        except Exception:
+            pass
+
+        # ── Clean up the data for display ──
+        STATUS_MAP = {
+            "EXECUTION_COMPLETE": "✅ Matched",
+            "EXECUTABLE": "⏳ Waiting",
+            "SETTLED": "🏁 Settled",
+        }
+
+        display_rows = []
+        for _, row in df_bets.iterrows():
+            match_name = market_names.get(row['Market ID'], row['Market ID'])
+
+            # Format timestamp
+            placed_raw = row.get('Placed', '')
+            try:
+                placed_dt = dt.strptime(placed_raw, "%Y-%m-%dT%H:%M:%S.%fZ")
+                placed_str = placed_dt.strftime("%d %b %Y, %H:%M")
+            except Exception:
+                placed_str = placed_raw
+
+            status_raw = row.get('Status', '')
+            status_clean = STATUS_MAP.get(status_raw, status_raw)
+
+            display_rows.append({
+                "Match": match_name,
+                "Type": f"{'🟢' if row['Side'] == 'BACK' else '🔴'} {row['Side']}",
+                "Odds": row['Price'],
+                "Stake": f"£{float(row['Size']):,.2f}",
+                "Matched": f"£{float(row['Matched']):,.2f}",
+                "Status": status_clean,
+                "Date": placed_str,
+                "P/L": row.get('Profit/Loss', '-'),
+            })
+
+        df_display = pd.DataFrame(display_rows)
+
         # Summary metrics
-        open_bets = df_bets[df_bets['Status'] != 'SETTLED']
+        matched_bets = df_bets[df_bets['Status'] == 'EXECUTION_COMPLETE']
         settled_bets = df_bets[df_bets['Status'] == 'SETTLED']
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Open Bets", len(open_bets))
-        col2.metric("Settled Bets", len(settled_bets))
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Bets", len(df_bets))
+        col2.metric("✅ Matched", len(matched_bets))
+        col3.metric("🏁 Settled", len(settled_bets))
         total_staked = pd.to_numeric(df_bets['Size'], errors='coerce').sum()
-        col3.metric("Total Staked", f"£{total_staked:,.2f}")
+        col4.metric("Total Staked", f"£{total_staked:,.2f}")
 
         st.markdown("---")
-
-        if not open_bets.empty:
-            st.subheader("🟢 Open / Unmatched Bets")
-            st.dataframe(open_bets, use_container_width=True, hide_index=True)
-
-        if not settled_bets.empty:
-            st.subheader("✅ Settled Bets")
-            st.dataframe(settled_bets, use_container_width=True, hide_index=True)
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
         st.info("No bets found on your Betfair account yet.")
+
