@@ -11,7 +11,7 @@ st.set_page_config(page_title="Tennis Betting Analytics", layout="wide", page_ic
 
 st.title("🎾 Tennis Betting Analytics & Backtesting Dashboard")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Rankings & Odds", "⚙️ Strategy Backtester", "📈 Backtest Results", "🤖 AI Live Agent"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Rankings & Odds", "⚙️ Strategy Backtester", "📈 Backtest Results", "🤖 AI Live Agent", "💰 Bet Log"])
 
 with tab1:
     st.header("Top 200 Players & Form")
@@ -269,3 +269,45 @@ with tab4:
     except Exception as e:
          st.error(f"Could not load upcoming matches for the agent: {e}")
 
+with tab5:
+    st.header("💰 Real Bet Log")
+    st.write("All bets placed on your Betfair account — open and settled.")
+
+    from src.api.odds import get_betfair_client
+    bet_client = get_betfair_client()
+
+    # Show balance
+    bal, bal_err = bet_client.get_account_balance()
+    if bal is not None:
+        st.success(f"💰 Available Balance: **£{bal:,.2f}**")
+
+    if st.button("🔄 Refresh Bet Log"):
+        st.cache_resource.clear()
+
+    bets, err = bet_client.get_bet_history()
+    if err:
+        st.error(f"Could not fetch bet history: {err}")
+    elif bets:
+        df_bets = pd.DataFrame(bets)
+
+        # Summary metrics
+        open_bets = df_bets[df_bets['Status'] != 'SETTLED']
+        settled_bets = df_bets[df_bets['Status'] == 'SETTLED']
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Open Bets", len(open_bets))
+        col2.metric("Settled Bets", len(settled_bets))
+        total_staked = pd.to_numeric(df_bets['Size'], errors='coerce').sum()
+        col3.metric("Total Staked", f"£{total_staked:,.2f}")
+
+        st.markdown("---")
+
+        if not open_bets.empty:
+            st.subheader("🟢 Open / Unmatched Bets")
+            st.dataframe(open_bets, use_container_width=True, hide_index=True)
+
+        if not settled_bets.empty:
+            st.subheader("✅ Settled Bets")
+            st.dataframe(settled_bets, use_container_width=True, hide_index=True)
+    else:
+        st.info("No bets found on your Betfair account yet.")

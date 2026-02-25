@@ -372,3 +372,54 @@ class BetfairClient:
             instruction_reports = result.get("instructionReports", [{}])
             instr_error = instruction_reports[0].get("errorCode", "") if instruction_reports else ""
             return None, f"Bet placement failed: {error_code} / {instr_error}"
+
+    def get_bet_history(self) -> tuple[list | None, str | None]:
+        """
+        Fetch current (open) orders and recently settled orders.
+        Returns a list of bet dicts.
+        """
+        if not self.session_token:
+            ok, msg = self.login()
+            if not ok:
+                return None, msg
+
+        bets = []
+
+        # Current / open orders
+        current, err = self._api_call("listCurrentOrders", {})
+        if err:
+            return None, err
+        if isinstance(current, dict):
+            for o in current.get("currentOrders", []):
+                bets.append({
+                    "Bet ID": o.get("betId", ""),
+                    "Market ID": o.get("marketId", ""),
+                    "Side": o.get("side", ""),
+                    "Price": o.get("priceSize", {}).get("price", o.get("averagePriceMatched", 0)),
+                    "Size": o.get("priceSize", {}).get("size", o.get("sizeMatched", 0)),
+                    "Matched": o.get("sizeMatched", 0),
+                    "Status": o.get("status", "OPEN"),
+                    "Placed": o.get("placedDate", ""),
+                    "Profit/Loss": "-",
+                })
+
+        # Settled orders
+        settled, err2 = self._api_call("listClearedOrders", {
+            "betStatus": "SETTLED",
+            "recordCount": 50,
+        })
+        if isinstance(settled, dict):
+            for o in settled.get("clearedOrders", []):
+                bets.append({
+                    "Bet ID": o.get("betId", ""),
+                    "Market ID": o.get("marketId", ""),
+                    "Side": o.get("side", ""),
+                    "Price": o.get("priceMatched", 0),
+                    "Size": o.get("sizeSettled", 0),
+                    "Matched": o.get("sizeSettled", 0),
+                    "Status": "SETTLED",
+                    "Placed": o.get("placedDate", ""),
+                    "Profit/Loss": f"£{o.get('profit', 0):,.2f}",
+                })
+
+        return bets, None
