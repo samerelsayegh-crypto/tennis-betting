@@ -10,7 +10,7 @@ class LiveBettingAgent:
     """
 
     # Minimum odds shift (%) to consider a point scored
-    POINT_DETECTION_THRESHOLD = 0.03  # 3%
+    POINT_DETECTION_THRESHOLD = 0.008  # 0.8%
     POLL_INTERVAL = 5  # seconds between odds checks
 
     def __init__(self, client, market_id: str, target_selection_id: int,

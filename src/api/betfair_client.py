@@ -207,7 +207,7 @@ class BetfairClient:
 
             book = book_lookup.get(market_id)
             if book:
-                in_play = book.get("inplay", False)
+                in_play = book.get("inPlay", False)
                 book_runners = book.get("runners", [])
                 for br in book_runners:
                     back_prices = br.get("ex", {}).get("availableToBack", [])
