@@ -203,9 +203,11 @@ class BetfairClient:
 
             p1_odds = 0.0
             p2_odds = 0.0
+            in_play = False
 
             book = book_lookup.get(market_id)
             if book:
+                in_play = book.get("inplay", False)
                 book_runners = book.get("runners", [])
                 for br in book_runners:
                     back_prices = br.get("ex", {}).get("availableToBack", [])
@@ -228,6 +230,7 @@ class BetfairClient:
                 "Match ID": market_id,
                 "Competition": competition,
                 "Date/Time": display_time,
+                "In Play": in_play,
                 "Player 1": p1_name,
                 "Player 2": p2_name,
                 "P1 Selection ID": runners[0]["selectionId"],

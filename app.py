@@ -140,7 +140,18 @@ with tab4:
     try:
         df_upcoming = get_upcoming_matches()
         if df_upcoming is not None and not df_upcoming.empty:
-            match_options = df_upcoming.apply(lambda row: f"{row['Player 1']} vs {row['Player 2']} ({row['Date/Time']})", axis=1).tolist()
+            # Sort: live matches first, then by date
+            has_in_play = 'In Play' in df_upcoming.columns
+            if has_in_play:
+                df_upcoming = df_upcoming.sort_values(by='In Play', ascending=False).reset_index(drop=True)
+
+            def format_match(row):
+                if has_in_play and row.get('In Play', False):
+                    return f"🔴 LIVE — {row['Player 1']} vs {row['Player 2']}"
+                else:
+                    return f"⏳ {row['Player 1']} vs {row['Player 2']} ({row['Date/Time']})"
+
+            match_options = df_upcoming.apply(format_match, axis=1).tolist()
             selected_match_str = st.selectbox("Select Match to Monitor:", match_options)
 
             selected_row = df_upcoming.iloc[match_options.index(selected_match_str)]
