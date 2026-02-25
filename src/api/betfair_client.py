@@ -139,27 +139,49 @@ class BetfairClient:
             if not ok:
                 return None, msg
 
-        # Step 2: Get upcoming tennis Match Odds markets
-        market_filter = {
-            "eventTypeIds": [self.TENNIS_EVENT_TYPE_ID],
-            "marketTypeCodes": ["MATCH_ODDS"],
-            "inPlayOnly": False,
-        }
+        # Step 2: Fetch BOTH in-play and pre-match tennis markets
+        projection = [
+            "EVENT",
+            "RUNNER_DESCRIPTION",
+            "MARKET_START_TIME",
+            "COMPETITION",
+        ]
 
-        catalogue_result, err = self._api_call("listMarketCatalogue", {
-            "filter": market_filter,
-            "maxResults": "50",
-            "marketProjection": [
-                "EVENT",
-                "RUNNER_DESCRIPTION",
-                "MARKET_START_TIME",
-                "COMPETITION",
-            ],
+        # Query 1: In-play markets
+        live_result, _ = self._api_call("listMarketCatalogue", {
+            "filter": {
+                "eventTypeIds": [self.TENNIS_EVENT_TYPE_ID],
+                "marketTypeCodes": ["MATCH_ODDS"],
+                "inPlayOnly": True,
+            },
+            "maxResults": "25",
+            "marketProjection": projection,
             "sort": "FIRST_TO_START",
         })
 
-        if err:
-            return None, err
+        # Query 2: Pre-match / upcoming markets
+        upcoming_result, _ = self._api_call("listMarketCatalogue", {
+            "filter": {
+                "eventTypeIds": [self.TENNIS_EVENT_TYPE_ID],
+                "marketTypeCodes": ["MATCH_ODDS"],
+                "inPlayOnly": False,
+            },
+            "maxResults": "25",
+            "marketProjection": projection,
+            "sort": "FIRST_TO_START",
+        })
+
+        # Merge: live first, then upcoming (deduplicate by marketId)
+        seen_ids = set()
+        catalogue_result = []
+        for m in (live_result or []):
+            if m["marketId"] not in seen_ids:
+                seen_ids.add(m["marketId"])
+                catalogue_result.append(m)
+        for m in (upcoming_result or []):
+            if m["marketId"] not in seen_ids:
+                seen_ids.add(m["marketId"])
+                catalogue_result.append(m)
 
         if not catalogue_result:
             return None, "No tennis markets found on Betfair Exchange right now."
@@ -207,7 +229,7 @@ class BetfairClient:
 
             book = book_lookup.get(market_id)
             if book:
-                in_play = book.get("inPlay", False)
+                in_play = book.get("inplay", False)
                 book_runners = book.get("runners", [])
                 for br in book_runners:
                     back_prices = br.get("ex", {}).get("availableToBack", [])
