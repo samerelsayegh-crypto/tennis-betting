@@ -179,7 +179,26 @@ with tab4:
             st.markdown("---")
             st.warning("⚠️ **REAL MONEY MODE**: Clicking Deploy will place actual bets on your Betfair account.", icon="⚠️")
 
-            if st.button("🚀 Deploy AI Agent", type="primary"):
+            # Initialize session state for agent control
+            if "agent_running" not in st.session_state:
+                st.session_state.agent_running = False
+
+            btn_col1, btn_col2 = st.columns([1, 1])
+            with btn_col1:
+                deploy_clicked = st.button("🚀 Deploy AI Agent", type="primary", disabled=st.session_state.agent_running)
+            with btn_col2:
+                stop_clicked = st.button("🛑 Stop AI Agent", type="secondary", disabled=not st.session_state.agent_running)
+
+            if stop_clicked:
+                st.session_state.agent_running = False
+                st.warning("⏹️ Agent stopped by user.")
+                st.rerun()
+
+            if deploy_clicked:
+                st.session_state.agent_running = True
+                st.rerun()
+
+            if st.session_state.agent_running:
                 st.subheader("🔴 Live Agent Console")
                 terminal_container = st.empty()
                 status_container = st.empty()
@@ -201,6 +220,12 @@ with tab4:
                 max_iterations = 500  # ~40 minutes of monitoring at 5s intervals
 
                 for i in range(max_iterations):
+                    # Check if user pressed stop (session state is updated on rerun)
+                    if not st.session_state.agent_running:
+                        agent.running = False
+                        agent.status = "STOPPED_BY_USER"
+                        break
+
                     step_log = agent.poll_and_act()
                     full_log = f"{step_log}\n\n---\n\n" + full_log
 
@@ -213,11 +238,16 @@ with tab4:
 
                     time.sleep(agent.POLL_INTERVAL)
 
+                # Agent finished — reset state
+                st.session_state.agent_running = False
+
                 # Final summary
                 if agent.status == "MATCH_ENDED":
                     st.success(f"🏁 Match finished! Final P&L: £{agent.cumulative_pnl:,.2f} | Wins: {agent.wins} | Losses: {agent.losses} | Bets: {len(agent.bets_placed)}")
                 elif agent.status == "STOPPED_MAX_LOSS":
                     st.error(f"🛑 Agent stopped — max loss of £{max_loss} reached. P&L: £{agent.cumulative_pnl:,.2f}")
+                elif agent.status == "STOPPED_BY_USER":
+                    st.warning(f"⏹️ Agent stopped by user. P&L: £{agent.cumulative_pnl:,.2f} | Bets placed: {len(agent.bets_placed)}")
                 elif agent.status == "ERROR":
                     st.error("🔴 Agent stopped due to an API error. Check the logs above.")
                 else:
